@@ -1,254 +1,207 @@
-# Singa — Product Plan (v2: vocal accompaniment)
+# Singa — Product Plan (v3)
 
-> A browser app that turns your webcam into an **air chord instrument** to accompany
-> your **singing**. You play lush, song-specific chords (the voicings and sounds
-> from songs you love) with your hands, then add harmonies, loops and backing
-> layers, all while you sing.
+> A browser app that turns your webcam into an **air chord instrument** for singing.
+> Play a song's chords with your hands, give them the song's **vibe** (instrument,
+> amp, effects), and sing over them. The app follows your lead.
 
-**Scope change from v1:** no live instruments. Your voice is the only live audio
-input, and the app plays the rest. That removes the "hands are busy" problem and the
-audio-interface and latency complications. Both hands are now free to *play*.
+**History:** v1 accompanied live guitar (dropped: hands too busy). v2 also derived chords
+from recordings (dropped: too complex). v3 is hand-played chords from **authored chord packs**, with
+**sound/vibe design**. A **microphone is optional**.
 
 ---
 
 ## 1. Core idea
 
-1. **You sing.** The mic carries only your voice.
-2. **Your hands play the chords.** Point at, pinch or swipe through chords in the air. The
-   chords aren't generic triads. They're **Chord Sounds**: the exact voicing,
-   instrument, articulation and effects that make a chord from a specific song sound
-   the way it does.
-3. **The app adds the band and the choir.** Vocal harmonies follow the current chord,
-   and optional loops and backing layers come in.
+1. **You sing.** Nothing needs to listen to you. The app just plays.
+2. **Your hands play the chords.** Step through a song's progression (Song mode) or pick
+   chords from pads in the air (Palette mode).
+3. **Each song has a vibe**: instrument + amp + effects. You can switch or tweak it live.
+
+**Do I need a mic?** No. Camera + speakers/headphones is enough for everything in Phase 1.
+A mic is only needed for *optional* later features that process your voice:
+
+| Optional mic feature | What it does |
+|---|---|
+| Chord-aware harmonizer | Adds backing harmony voices to *your* voice that follow the chord you're playing |
+| Vocal effects | Reverb/delay on your voice through the app |
+| Vocal looper | Record and layer your own "oohs" |
+| Performance recording | Saves a video with your voice and the chords mixed together |
 
 ---
 
-## 2. "Specific chords from specific songs": how we get that sound
+## 2. Chords
 
-The "Daniel Caesar sound" in a song like *Loose* isn't just the chord name.
-Chord sites list both a basic version (C, Dm7, Em7, A7, G7…) and a richer "jazz"
-version (Dbmaj9, Db9, Ebm7/Db, Gbm6/Db, Fm7/C, Bdim7…). The richer version is
-what people recognize. A chord's unique sound comes from four layers:
+### 2.1 Chord Packs
+- A **Chord Pack** = one song: key, sections (verse/chorus/…), the chord progression for each section, and the
+  default **vibe**.
+- Chords are written as **regular chord symbols** (`Dmaj7`, `C#m7`, `Bm9`, `G/B`, `Esus4`). The app's
+  **voicing engine** turns each one into good-sounding notes for the chosen instrument (§2.2).
+- The chords come from published chord charts, cross-checked across several sources. Packs are JSON, so
+  you can add or correct songs yourself in a simple **pack editor**.
+- **Transpose** button: move the whole pack up or down to fit your voice.
+- An optional **capo-style** setting for guitar-sounding packs (keeps open-string voicings while changing key).
 
-| Layer | What it means | Example |
+### 2.2 Voicing engine (makes simple chord symbols sound good)
+The same `Dmaj7` sounds very different depending on how it's voiced. The engine picks the notes by
+**instrument** and **vibe**:
+- **Guitar voicings**: real guitar chord shapes (open chords, barre chords, jazzy grips), played as a strum
+  low → high string.
+- **Piano voicings**: left-hand root/octave + right-hand close or spread voicing, in a mid register.
+- **Voice leading**: each chord is voiced close to the previous one, so changes sound smooth instead of jumpy.
+- **Richness setting**: *Simple* (triads) → *Full* (7ths) → *Lush* (adds 9ths/sus colors where they fit). A per-song
+  default, changeable live.
+
+---
+
+## 3. Vibes (sound design per song) ⭐
+
+A **Vibe** is a preset of instrument + playing style + effects chain. Every pack has a default, and you can
+switch between vibes live or build your own.
+
+### 3.1 The signal chain
+```
+ Instrument ─► Articulation ─► [Amp / Drive] ─► [Cab / Tone EQ] ─► [Modulation] ─► [Delay] ─► [Reverb] ─► [Lo-fi / Tape] ─► Out
+ (guitar,       (strum speed,   clean, crunch,   speaker sim,       chorus,         slapback,   room, spring,  wobble, vinyl,
+  piano,         pick, roll,    fuzz, tube        bright/warm/      tremolo,        dotted 8th, plate, hall,   low-pass,
+  Rhodes...)     arpeggio)      warmth            dark EQ           vibrato, phaser  ping-pong   shimmer        saturation
+```
+Each block can be bypassed and has 2–3 simple knobs. No studio jargon in the UI ("Grit", "Warmth", "Space").
+
+### 3.2 Instruments (Phase 1)
+- **Clean electric guitar**: runs through the amp blocks for the classic "amp" feel.
+- **Acoustic steel-string guitar**
+- **Nylon guitar**
+- **Piano** (grand/upright)
+- **Rhodes / electric piano**
+- Later: Wurlitzer, organ, synth pad, choir "oohs", strings.
+
+### 3.3 Starter vibes
+
+| Vibe | Chain | Good for |
 |---|---|---|
-| **Voicing** | The exact notes, register and spacing, plus extensions (9, 11, 13), slash bass and inversions | `Db maj9` = Db2 · Ab2 · C4 · Eb4 · F4, not just Db-F-Ab |
-| **Timbre** | The instrument | Warm Rhodes, nylon guitar, clean electric with chorus, organ, choir pad |
-| **Articulation** | How the chord is played | Slow strum, rolled piano, arpeggio pattern, pulsing 8ths, swell |
-| **Color FX** | The production around it | Tape wobble, lo-fi filter, plate reverb, vinyl noise |
+| **Neo-soul clean** | Clean electric → light tube warmth → chorus → plate reverb | Daniel Caesar |
+| **Bedroom acoustic** | Nylon/acoustic → soft compression → room reverb → touch of tape | beabadoobee |
+| **Ballad piano** | Grand piano → warm EQ → hall reverb | Olivia Rodrigo |
+| **Grunge crunch** | Electric → crunch/fuzz → cab → room | Louder songs, bridges (e.g. Olivia's rock songs) |
+| **Lo-fi dream** | Rhodes → tremolo → tape wobble → low-pass → spring reverb | Late-night, intimate |
+| **Shimmer** | Electric → chorus → dotted-8th delay → shimmer reverb | Big choruses |
 
-To get those layers, Singa offers **three methods**. Each one is closer to the original recording than the last:
-
-### Method A: Chord Packs (hand-authored, built in)
-- A **Chord Pack** is a song's progression, written as exact voicings plus instrument and
-  articulation presets. Example: "Loose-style" in Db: maj9 / dominant 9 / minor 7 over a
-  Db pedal / m6 / dim7 voicings on a warm keys or guitar patch.
-- The app plays them with **high-quality sampled instruments**, so they sound real, not like
-  a cheap synth.
-- They sound **"in the style of"**, close but not identical to the record.
-- **They can be shipped and shared.** Chord progressions and voicings generally aren't
-  protected the way recordings and melodies are, so packs can be community-made. *(Not legal
-  advice. We'd check before running a public pack marketplace.)*
-- There's also a **chord editor**: build a voicing on a piano roll or keyboard, preview it and save it.
-
-### Method B: Transcribe from a song you own (exact notes)
-- Import an audio file. Spotify's open-source **Basic Pitch** (runs in the browser) turns it into notes.
-- The app splits the song into chord segments by beat and harmonic change. Then it pulls out
-  the **actual notes of each chord**, gives each one a name (e.g. "Ebm7/Db") and saves it as a
-  voicing in a new pack.
-- You get **exactly the voicings from the record**, played on your chosen instrument.
-  It's the right harmony with a near-matching timbre.
-
-### Method C: Sample the actual recording (exact sound)
-- Import a song you own. **Source separation** (a Demucs-style model) removes the vocals and
-  drums, leaving the keys, guitars and bass.
-- The app cuts the result into **chord slices**: one slice per chord, in time with the beat.
-- Each slice becomes a pad. You get **the real sound from the record**.
-- To hold a chord for as long as you sing a note, the app **freezes** it: it smoothly
-  re-loops a tiny section so the chord sustains.
-- **For personal use only.** These packs stay on your device and can't be exported or shared
-  (copyright). The app will say this clearly.
-
-**How hard is Method C?** It's the hardest feature in the app, roughly 3–4× the work of Method B,
-because it reuses all of B's chord-boundary detection and then adds three hard problems:
-
-| Problem | Difficulty | Why |
-|---|---|---|
-| Source separation | Medium (local helper) / Hard (in browser) | Demucs works well and is a one-line `pip install` on a laptop (a few minutes per song). Running it in the browser means converting the model to ONNX/WebGPU, which is painful and slow on weak GPUs |
-| Clean chord slices | Medium | Separated stems leak (vocal remnants, a "watery" sound), and real parts move *inside* a chord (bass walks, melody fills). Slices need a review/trim screen |
-| Sustaining a chord while you sing | **Hard** | Held keys and pads freeze nicely. Strummed or rhythmic parts (most pop guitar and piano) sound obviously "looped" or smeared when held. Playing the slice's natural attack and then fading into a frozen tail helps, but isn't perfect |
-| Changing key | Hard | Pitch-shifting real audio to fit your vocal range sounds worse with every semitone. Methods A and B transpose perfectly |
-
-**Estimate:** a rough prototype with a local Python helper (Demucs + chord segmentation) takes about
-1–2 weeks; a polished in-browser version takes 4–6+ weeks. **Recommendation:** build a throwaway
-Python script during Phase 0 (about 2–3 days) that slices one song so you can *hear* whether
-it's worth it, and keep the app's data model ready for it. Then decide.
-
-> Recommended order: **A first** (works offline, easy to share), **B second**
-> (the most useful "make any song's chords" feature), **C third** (the wow factor; the
-> source-separation model is heavy).
+### 3.4 Changing the vibe live
+- **Per section**: a pack can switch vibe automatically (e.g. clean verse → crunch chorus).
+- **Gesture**: 👍/👎 cycles through the song's vibe list.
+- **Left-hand "vibe knob"**: hand height sweeps one *macro* control (e.g. Grit or Space) for builds
+  and swells.
 
 ---
 
-## 3. Play modes
+## 4. Play modes
 
-Different songs and skill levels need different modes. You can switch between them per song.
+Both modes use the same pack. The difference is **who decides which chord comes next**.
 
-### 3.1 Song mode ⭐ (default, the most reliable live)
-- A pack's progression is laid out in order: `Dbmaj9 → Db9 → Ebm7/Db → Gbm6/Db → …`.
-- **One gesture moves to the next chord** (swipe or pinch). You set the timing, so it
-  follows your phrasing. You don't have to stay on a click.
-- The screen shows the current and next chord, along with the lyric line if you add one.
-- Section jumps (verse → chorus) use a second gesture or an air button.
+### 4.1 Song mode ⭐ (primary)
+*The app knows the order. You decide when.*
+- A teleprompter-style strip shows `NOW: Dmaj7 · NEXT: C#m7 · then Bm7`.
+- **Swipe or pinch = next chord.** It follows your timing completely: no tempo, no click.
+- No need to know the song's chords. Sections can be jumped to (verse ↔ chorus) with a gesture or an air button.
 
-### 3.2 Palette mode (air Omnichord)
-- 6–8 **chord pads** float over the camera view in a grid. **Point** at one with your
-  right hand and **pinch** to play it. Pinch and hold = sustain, release = let it ring and fade.
-- Great for improvising and jamming around a song's chord set.
-- Inspired by the Suzuki Omnichord, Telepathic Instruments' *Orchid*, HiChord and similar one-touch chord instruments.
-
-### 3.3 Theory mode (play any chord in a key)
-- Right hand **finger count** (1–5) plus a **raised or lowered** hand chooses scale degree I–VII.
-- Left hand chooses the **color**: plain / 7 / 9 / sus / "Caesar" (the pack's signature
-  extension set).
-- For advanced users who want to reharmonize on the fly.
+### 4.2 Palette mode
+*The app gives you buttons. You decide which.*
+- The song's unique chords (usually 4–6) float as pads over the camera view.
+- **Point** at a pad and **pinch** to play it. Hold the pinch to sustain, release to let it ring.
+- For improvising, playing a different order, or vamping on an ending.
 
 ---
 
-## 4. Gesture vocabulary (free hands)
+## 5. Gestures
 
-**Right hand = what to play. Left hand = how it sounds.** All mappings can be changed, and the hands swap for left-handed users.
+**Right hand = play. Left hand = shape.** All mappings can be changed, and the hands swap for left-handed users.
 
-| Gesture | Hand | Action | Notes |
+| Gesture | Hand | Song mode | Palette mode |
 |---|---|---|---|
-| **Pinch** (thumb + index) | Right | Play the chord (pinch down) / sustain (hold) / release | Most precise and reliable gesture; rarely triggers by accident |
-| **Point + hover** | Right | Choose a pad (Palette mode) | Pad highlights before you pinch |
-| **Swipe right / left** | Right | Next / previous chord (Song mode) | Speed of the swipe = how hard the chord is played |
-| **Air strum** (vertical swipe) | Right | Strum the chord (down or up) | Swipe speed = strum speed and loudness. Feels great with guitar patches |
-| **Hand height** | Left | Volume / filter brightness | Continuous control, a "swell" |
-| **Palm distance from camera** | Left | Reverb/space amount | |
-| **Open palm held** | Left | Sustain pedal (holds current chord) | |
-| **Fist** | Left | Stop / mute everything (cuts out at the end of the beat if a tempo is running) | |
-| **Finger count 1–4** | Left | Articulation: hold / strum / arpeggio / rhythm pattern | |
-| **Thumbs up / down** | Either | Next / previous section (verse → chorus) | |
-| **✌️ Victory** | Either | Toggle vocal harmonizer | |
-| **🤘 Rock** (held 1 s) | Either | Looper: record / overdub / play | |
+| **Pinch** | Right | Play the **next** chord | Play the **pointed-at** pad |
+| **Swipe right / left** | Right | Next / previous chord | — |
+| **Air strum** (vertical swipe) | Right | Strum the current chord (down/up, speed = intensity) | Same |
+| **Point + hover** | Right | — | Select a pad |
+| **Hand height** | Left | Volume swell or vibe macro (Grit/Space) | Same |
+| **Open palm held** | Left | Sustain (hold the chord) | Same |
+| **Fist** | Left | Stop / mute | Same |
+| **👍 / 👎** | Either | Next / previous vibe | Same |
+| **✌️** | Either | Next section | Toggle Song ↔ Palette |
 
-**Anti-false-trigger rules:**
-- Gestures count only when the hand is in a **play zone** (chest height and above, in front of you).
-- Hold times for "command" gestures (thumbs, fist, rock). Instant response for "play" gestures (pinch, strum).
-- **Hands down = rest**: dropping your hands out of the zone never fires anything.
+Gestures only count in the **play zone** (hands raised in front of you). Hands down = rest, so nothing fires.
+Keyboard fallback: arrow keys / space work as next/prev/play.
 
 ---
 
-## 5. Voice features
+## 6. What the app looks like
 
-| Feature | Description | Phase |
-|---|---|---|
-| **Chord-aware harmonizer** ⭐ | Pitch-shifts your live voice into 1–3 harmony voices **built from the chord you're currently playing**, not just the key. So when you play Ebm7/Db, the harmonies land on Ebm7 tones automatically. *(Easier than v1 because the app already knows the chord. Nothing has to be detected.)* | 2 |
-| **Vocal effects** | Reverb, delay, doubler, light pitch correction (snaps to the current chord or scale) | 2 |
-| **Vocal looper** | Layer your own "oohs" and harmonies (Jacob Collier / Ed Sheeran style). Loops line up with the beat or with chord changes | 3 |
-| **Key finder** | Sing a few notes, and the app suggests a pack's best key for your range. Packs can transpose | 3 |
-| **"Follow me" chords** *(stretch)* | The app listens to your melody and suggests the next chord. Optionally it plays chords for you | 5 |
-
----
-
-## 6. Backing layers (optional, around the chords)
-
-- **Bass follow**: an automatic bass note (root or slash bass) under each chord, with a choice of patterns.
-- **Drum/percussion loops**: simple neo-soul / R&B / lo-fi grooves at a tempo you set or tap in
-  (tap by **clapping**, which the camera can see).
-- **Pad bed**: a soft sustained pad that follows the chords.
-- When a groove is running, chord changes can optionally **snap to the beat** (switch on per song).
-
----
-
-## 7. What the app looks like
-
-### 7.1 Perform view
+### 6.1 Perform view
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ "Loose" (Chord Pack · Db)   Mode: SONG   ♩ free   Harmony: ON  [⚙] [⏺]  │
+│ "Best Part"   Key: E (+0)   Mode: SONG   Vibe: Neo-soul clean ▾   [⚙]    │
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│            (mirrored camera, hand skeletons, play zone outline)          │
+│             (mirrored camera, hand skeletons, play-zone outline)         │
 │                                                                          │
-│      NOW  ███  Dbmaj9          NEXT ▸  Db9     then  Ebm7/Db            │
-│      ┌─────────────────────────────────────────────┐                     │
-│      │  ♪ "lyric line for this chord (optional)"   │   L: ▮▮▮▯ swell     │
-│      └─────────────────────────────────────────────┘      reverb ▮▮▯▯   │
+│     NOW  ████  Emaj7          NEXT ▸  D#m7      then  G#m7               │
+│                                                                          │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ VERSE ▶ │ CHORUS │ BRIDGE      Voicing: Db2 Ab2 C4 Eb4 F4   Patch: Keys   │
-│ MIC ▁▃▅▇▅▃   sung: F4 ✓ (in chord)    Harmony: +3rd  +5th                │
+│ VERSE ▶ │ CHORUS │ BRIDGE        Grit ▮▯▯▯  Space ▮▮▮▯  Warmth ▮▮▯▯       │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
-Palette mode shows chord pads floating over the camera view instead of the NOW/NEXT strip.
+*(Chord names in the mockup are placeholders. Real packs use verified charts.)*
 
-### 7.2 Chord Pack editor
-- A progression timeline (sections → chords) and a **voicing editor** for each chord (piano
-  roll plus on-screen keyboard), with an instant preview.
-- Instrument, articulation and FX pickers. The pack's default "sound" can be overridden per chord.
-- "Import from audio…" (Method B or C) → review the detected chords → fix any mistakes → save.
+### 6.2 Vibe editor
+Pedalboard-style row of blocks (instrument → amp → cab → mod → delay → reverb → lo-fi). Click a block to
+tweak its 2–3 knobs, toggle it on/off, save as a named vibe, and play a test chord at any time.
 
-### 7.3 Library
-- Built-in packs, your packs, imported (personal-only) packs and setlists.
-- Each pack card shows key, mode, instrument and a play-preview button.
+### 6.3 Pack editor
+Song name, key, sections, chords typed as symbols (with autocomplete and instant preview), default vibe,
+and a vibe for each section.
 
-### 7.4 Setup (about 1 minute)
-- Pick the mic. **Wired headphones are the default** (no feedback; the harmonizer hears only your
-  voice). **Bluetooth headphones get a warning**: they add about 150–250 ms of delay, which makes
-  playing chords feel laggy. **Speakers** work for chords only. Speaker sound leaks into the mic,
-  so harmonies would harmonize the chords, and the harmonizer is turned off or gated in that mode.
-- Camera framing check (chest up, both hands visible).
-- A quick gesture tutorial: pinch, swipe, strum, fist.
+### 6.4 Library
+Songs (packs), vibes, setlists. Search, plus a preview button on each card.
+
+### 6.5 Setup (about 30 seconds)
+Camera framing check → gesture mini-tutorial (pinch, swipe, strum, fist) → choose output. Wired headphones
+or speakers are both fine. **Bluetooth gets a warning** (adds about 150–250 ms of delay, so chords feel laggy).
 
 ---
 
-## 8. Starter content: first song packs
+## 7. Starter songs (Phase 1)
 
-Picked for **easy-to-sing melodies, a comfortable range and repeating progressions**. Before shipping, each
-pack's chords and voicings will be checked against several chord charts *and* by running Method B on the
-recording. Candidates:
-
-| Artist | Song candidates | Character / sound to capture |
+| Artist | Song | Default vibe |
 |---|---|---|
-| **Daniel Caesar** | *Best Part*, *Get You*, *Japanese Denim*, *Loose* | Neo-soul: maj9 / min9 / slash chords on warm clean electric guitar or Rhodes, soft strums |
-| **Olivia Rodrigo** | *drivers license*, *traitor*, *happier*, *favorite crime* | Piano or acoustic ballads: simple triads/sus chords, but **register and piano tone** matter a lot |
-| **beabadoobee** | *Glue Song*, *the perfect pair*, *Coffee* | Fingerpicked/strummed acoustic or nylon guitar with jazzy 7ths; light, intimate |
+| Daniel Caesar | *Best Part* | Neo-soul clean |
+| Olivia Rodrigo | *drivers license* | Ballad piano |
+| beabadoobee | *Glue Song* | Bedroom acoustic |
 
-**Phase 1 starts with 3 packs (one per artist)**, e.g. *Best Part*, *drivers license*, *Glue Song*.
+Next candidates: *Get You*, *Japanese Denim*, *Loose* · *traitor*, *happier*, *favorite crime* · *the perfect pair*, *Coffee*.
 
-**Instruments needed (phase 1):** clean electric guitar, acoustic/nylon guitar, grand/upright piano,
-Rhodes. Later: choir "ooh" pad, warm synth pad, sub bass. All from freely licensed sample libraries
-(e.g. Salamander Grand Piano, CC-BY), tracked in a `CREDITS.md`.
+Instrument samples come from freely licensed libraries (e.g. Salamander Grand Piano, CC-BY), tracked in `CREDITS.md`.
 
 ---
 
-## 9. Roadmap
+## 8. Roadmap
 
 | Phase | Goal | Deliverable |
 |---|---|---|
-| **0 — Spikes** | Prove the riskiest parts | (a) Pinch/swipe/strum detection: how reliable and how fast. (b) A sampled Rhodes playing a voicing with no audible delay from pinch to sound. (c) Basic Pitch on a song clip: are the extracted voicings any good? (d) Method C listening test: a throwaway Python script that slices one song. |
-| **1 — Air chords** | "Play a song's chords with my hands" | **Song mode** (follows your lead, no tempo) + basic Palette mode, Chord Pack format, 3 starter packs, sampled instruments, articulations (hold/strum/arpeggio), left-hand swell, keyboard fallback |
-| **2 — Voice** | "It sings with me" | Chord-aware harmonizer, vocal FX, mic monitoring |
-| **3 — Make your own** | "Get the chords from any song" | Chord editor, **Method B** (audio → voicings), transpose, vocal looper, setlists |
-| **4 — Backing** | "A full band" | Bass follow, drum grooves, beat-snap, performance recorder (video + audio) |
-| **5 — Magic** | Stretch goals | **Method C** (sample the real recording + freeze), "follow me" chord suggestions, custom gestures, MIDI out |
+| **0 — Spikes** | Prove the risky parts | (a) Pinch/swipe/strum detection: reliability + latency. (b) Sampled guitar + piano playing voiced chords on pinch with no audible delay. (c) Amp/reverb chain in Web Audio, judged by ear |
+| **1 — Air chords** | "Play my songs with my hands" | Song mode, Palette mode, voicing engine, 5 instruments, vibe chain + 6 starter vibes, 3 starter packs, transpose, keyboard fallback |
+| **2 — Make it yours** | Customize | Vibe editor, pack editor, per-section vibes, more songs, setlists |
+| **3 — Optional mic** | "It sings with me" | Chord-aware harmonizer, vocal FX, performance recorder |
+| **4 — Extras** | Stretch goals | Optional groove/beat layer, bass-follow, vocal looper, MIDI out, custom gestures |
 
 ---
 
-## 10. Decisions so far
+## 9. Decisions
 
 | Topic | Decision |
 |---|---|
-| Live input | Voice only, no instruments |
-| Primary mode | **Song mode** (Palette mode is a secondary view of the same pack) |
-| Timing | **Chords follow your lead.** No tempo or click in phase 1; beat-snap and grooves come later and are optional |
-| Monitoring | **Wired headphones by default**; speakers supported for chords without harmonies |
-| First artists | Daniel Caesar, Olivia Rodrigo, beabadoobee (see §8) |
-| Method C | Do a Phase 0 listening test first, then decide whether to build it (see §2) |
-
-## 11. Open questions
-
-1. Confirm the three Phase 1 songs (one per artist), or swap in others from §8.
-2. Your comfortable vocal range (or just which songs feel easy). Packs get transposed to fit you.
+| Live input | **Camera only.** Mic optional (Phase 3+) |
+| Chord source | **Regular chord symbols** from charts + voicing engine. No audio import, transcription or slicing |
+| Sound | **Vibes**: instrument + amp + effects per song/section, switchable live |
+| Primary mode | Song mode. Palette mode secondary |
+| Timing | Chords follow your lead. No tempo in Phase 1 |
+| Output | Wired headphones or speakers. Bluetooth discouraged |
+| First songs | *Best Part*, *drivers license*, *Glue Song* |

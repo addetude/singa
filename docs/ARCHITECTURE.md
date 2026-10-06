@@ -1,4 +1,4 @@
-# Singa — Architecture (v2: vocal accompaniment)
+# Singa — Architecture (v3)
 
 Companion to [PLAN.md](./PLAN.md).
 
@@ -6,216 +6,181 @@ Companion to [PLAN.md](./PLAN.md).
 
 | Decision | Choice | Why |
 |---|---|---|
-| Platform | **Browser SPA, desktop Chrome/Edge first** | WebGPU/WASM, AudioWorklet, getUserMedia, Web MIDI |
-| Backend | **None for phases 1–4.** Optional local helper for Method C (phase 5) | Privacy (users' songs never leave the machine), offline, free hosting |
+| Platform | **Browser SPA, desktop Chrome/Edge first** | WebGPU/WASM for vision, AudioWorklet, getUserMedia |
+| Backend | **None.** Static hosting | Packs and vibes are JSON. Everything runs locally and offline |
 | Build / UI | **TypeScript + Vite + React + Zustand** | The UI is thin. The engines are framework-agnostic TS |
-| Vision | **MediaPipe Tasks Vision**: HandLandmarker (2 hands) + GestureRecognizer. PoseLandmarker optional (play zone) | GPU-accelerated, 21 landmarks per hand, built-in gesture labels |
-| Instruments | **Multisampled instruments** loaded from SFZ-style sample maps, played by a custom sampler on Web Audio (or `Tone.Sampler` to start) | Realistic sound is what makes a "Caesar chord" sound like one. Synths won't |
-| Harmonizer DSP | AudioWorklet: McLeod pitch detection + PSOLA pitch shifting | Low latency on a monophonic voice |
-| Audio analysis | **Spotify Basic Pitch** (`@spotify/basic-pitch`, TF.js) in a worker; Essentia.js/Meyda for beats and chroma | Runs in the browser and handles polyphonic notes |
-| Source separation | Phase 5: Demucs-family model, either ONNX Runtime Web (WebGPU) **or** an optional local Python helper | Heavy model. Browser-first if fast enough, with a helper as fallback |
-| Storage | IndexedDB (Dexie): packs, samples, user audio, analysis cache | Large blobs, offline |
-| Offline | PWA: caches the app, models and the instrument samples in use | |
-| Hosting | Static host with COOP/COEP headers | SharedArrayBuffer for audio and worker rings |
-
-**Audio path:** the mic carries the voice only. The app outputs chords, the backing and
-*wet* harmonies. The dry voice is either monitored on the user's interface or headphones,
-or passed through by the app (adds about 10–20 ms, which is fine for most singers). Users choose in setup.
+| Vision | **MediaPipe Tasks Vision**: HandLandmarker (2 hands) + GestureRecognizer | GPU-accelerated, 21 landmarks per hand, built-in gesture labels |
+| Instruments | **Multisampled instruments** (SFZ-lite JSON maps + compressed samples), played by a custom sampler | Realism matters for the "vibe" |
+| Effects | **Native Web Audio nodes** (WaveShaper, BiquadFilter, Convolver, Delay, DynamicsCompressor) + small AudioWorklets where needed (tape wobble, shimmer) | Low CPU, no dependencies |
+| Music theory | Small in-house module (or `tonal` npm) for chord-symbol parsing and transposition | Voicing logic is custom anyway |
+| Storage | IndexedDB (Dexie) for user packs/vibes. Built-in packs ship as JSON | |
+| Offline | PWA: caches the app, MediaPipe models and the instrument samples in use | |
+| Mic | **Not used in Phase 1–2.** Phase 3 adds an optional mic graph | Keeps setup to "allow camera" |
 
 ## 2. High-level diagram
 
 ```
- Webcam ─► VISION WORKER ──────────────────────────────────────────────┐
-           MediaPipe hands (+pose) → features (pinch dist, velocity,  │ GestureEvents
-           finger count, height, zone) → gesture FSMs                 │ (+ continuous values)
-                                                                      ▼
- Keyboard / MIDI ─────────────────────────────────────────►  INPUT ROUTER
-                                                                      │
-                                                              MAPPING LAYER (per mode)
-                                                                      │  PerformanceActions
-                                                                      ▼
-                                       ┌────────────── PERFORMANCE CONTROLLER ──────────────┐
-                                       │ Mode logic: Song (cursor in progression) /        │
-                                       │ Palette (pad grid) / Theory (degree + color)      │
-                                       │ → "current chord" state (ChordSound + dynamics)   │
-                                       └──────┬───────────────────────────┬─────────────────┘
-                                              │ chord events              │ current chord tones
-                                              ▼                           ▼
- ┌──────────────────────────────── AUDIO ENGINE (AudioContext) ──────────────────────────────┐
- │ Articulator (hold / strum / roll / arpeggio / rhythm; optional beat-snap via Transport)  │
- │   → Sampler voices (instrument per ChordSound) → Color FX chain ─┐                       │
- │ Slice player (Method C pads, freeze/granular sustain) ───────────┤                       │
- │ Bass-follow + drum grooves (phase 4) ────────────────────────────┤                       │
- │ Mic ─► Harmonizer worklet (pitch detect → chord-tone targets → PSOLA) ─► vocal FX ───────┤──► Master ─► Out
- │     └► Vocal looper worklet ─────────────────────────────────────────────────────────────┘      └► Recorder
+ Webcam ─► VISION WORKER ───────────────────────────────────────────┐
+           MediaPipe hands → features (pinch distance, fingertip    │ GestureEvents
+           velocity, pointer position, height, zone) → gesture FSMs │ (+ continuous values)
+                                                                    ▼
+ Keyboard / MIDI ────────────────────────────────────────►  INPUT ROUTER → MAPPING (per mode)
+                                                                    │ PerformanceActions
+                                                                    ▼
+                         ┌─────────────── PERFORMANCE CONTROLLER ───────────────┐
+                         │ Song mode (cursor in progression) / Palette (pads)   │
+                         │ Current pack, section, chord, vibe, transpose        │
+                         └───────────┬──────────────────────────┬───────────────┘
+                                     │ chord symbol + context   │ vibe changes / macro values
+                                     ▼                          ▼
+                         ┌── VOICING ENGINE ──┐       ┌──── VIBE MANAGER ────┐
+                         │ symbol → notes for │       │ builds/updates FX     │
+                         │ instrument + style,│       │ chain, crossfades on  │
+                         │ voice-leading      │       │ vibe switch           │
+                         └─────────┬──────────┘       └──────────┬───────────┘
+                                   ▼                             ▼
+ ┌────────────────────────────── AUDIO ENGINE (AudioContext) ───────────────────────────────┐
+ │ Articulator (hold / strum / roll / arpeggio) → Sampler (instrument)                      │
+ │   → Amp/Drive → Cab/EQ → Modulation → Delay → Reverb → Lo-fi → Master (limiter) → Out    │
  └──────────────────────────────────────────────────────────────────────────────────────────┘
-
- ANALYSIS (offline, worker, not real-time):
-   user audio ─► [Method C: separation] ─► beat tracking ─► chord segmentation (chroma + Basic Pitch notes)
-              ─► voicing extraction ─► ChordPack (B) or SlicePack (C) ─► IndexedDB
 ```
 
 ## 3. Modules
 
 ```
 src/
-  app/              Shell + routes: Setup, Perform, PackEditor, Library
-  state/            Zustand stores: performance, packs, settings, ui
+  app/              Shell + routes: Setup, Perform, VibeEditor, PackEditor, Library
+  state/            Zustand stores: performance, library, settings, ui
   vision/
     worker.ts       MediaPipe in a worker (ImageBitmap frames in, events out)
-    features.ts     Pinch distance (normalized to hand size), fingertip velocity, finger count,
-                    palm height/depth, handedness, play-zone test
-    gestures/       pinch.ts, swipe.ts, strum.ts, pose-commands.ts (fist/thumbs/victory/rock), pointer.ts
-    fsm.ts          Hysteresis + dwell + cooldown; "play" gestures fire instantly, "command" gestures need a dwell
-  input/            keyboard.ts, midi.ts, all emit the same GestureEvent shape
-  mapping/          Per-mode gesture → action tables, user overrides
-  performance/
-    controller.ts   Owns the current chord/section/mode, handles actions
-    modes/          song.ts, palette.ts, theory.ts
+    features.ts     Pinch distance (normalized to hand size), fingertip velocity, pointer, height, handedness, zone
+    gestures/       pinch.ts, swipe.ts, strum.ts, pointer.ts, poses.ts (fist, palm, thumbs, victory)
+    fsm.ts          Hysteresis, dwell and cooldown. "Play" gestures fire instantly, "command" gestures need a dwell
+  input/            keyboard.ts, midi.ts (same event shape as vision)
+  mapping/          Per-mode gesture → action tables + user overrides
+  performance/      controller.ts, modes/song.ts, modes/palette.ts
+  music/
+    chords.ts       Parse symbols ("C#m7", "G/B", "Bm9", "Esus4") → root, quality, extensions, bass
+    transpose.ts    Transpose with sensible enharmonic spelling for the key
+    voicing/
+      piano.ts      Rules-based voicer (LH root/octave + RH close/spread, register limits)
+      guitar.ts     Fretboard voicer: shape library + search over playable fingerings
+      leading.ts    Pick the voicing candidate closest to the previous chord
   audio/
-    engine.ts       AudioContext, routing, master bus, latency info
-    transport.ts    Optional tempo clock + lookahead scheduler (beat-snap, grooves, looper)
-    articulator.ts  Turns (ChordSound, velocity, direction) into scheduled note-ons
-    sampler/        SFZ-lite loader, voice allocation, round-robin, velocity layers, release tails
-    slices.ts       Method C slice playback + freeze (loop crossfade / granular)
-    harmonizer/     worklet (pitch + PSOLA), target-note logic using the current chord tones
-    looper/         Vocal looper worklet
-    fx/             Reverb (convolution), chorus, tape wobble, lo-fi filter, delay
-    recorder.ts     canvas.captureStream + master bus → MediaRecorder
-  analysis/
-    worker.ts       Runs Basic Pitch, beat tracking, chroma
-    segment.ts      Beat-synchronous harmonic change detection → chord segments
-    voicing.ts      Notes in segment → weighted pitch set → cleaned voicing + chord name
-    separate.ts     (phase 5) Source separation adapter (ONNX web or local helper)
-  music/            Note/interval/chord-symbol parsing + naming, scales, transposition, voice leading
-  packs/            Schema, validation, built-in packs (JSON), import/export (.singapack)
+    engine.ts       AudioContext, master bus, limiter, output selection
+    sampler/        Instrument loader, voice allocation, velocity layers, round-robin, release tails
+    articulator.ts  (notes, velocity, direction, style) → scheduled note-ons (strum spread + humanize)
+    fx/
+      amp.ts        Pre-EQ → WaveShaper (curves: clean/tube/crunch/fuzz, oversample 4x) → post-EQ
+      cab.ts        Short ConvolverNode IRs (1x12, 2x12, 4x12) + tone EQ
+      mod.ts        Chorus, tremolo, vibrato, phaser
+      delay.ts      Slapback, dotted-8th (free ms in phase 1), ping-pong
+      reverb.ts     Convolver IRs: room, spring, plate, hall. Shimmer via worklet
+      lofi.ts       Tape wobble (modulated delay), saturation, low-pass, vinyl noise
+      chain.ts      Builds the chain from a VibePreset, macro mapping, glitch-free switching
+    vibes/          Built-in vibe presets (JSON)
+  packs/            Schema, validation, built-in packs (JSON), import/export
   storage/          Dexie schema
 ```
 
-## 4. Core data model
+## 4. Data model
 
 ```ts
-// A chord's full "sound"
-interface Voicing {
-  symbol: string;            // display name, e.g. "Ebm7/Db"
-  notes: number[];           // MIDI notes, exact register, e.g. [49, 56, 72, 75, 77]
-  bass?: number;             // optional separate bass note (for bass-follow / slash chords)
-}
-interface Articulation {
-  kind: 'hold' | 'strum' | 'roll' | 'arpeggio' | 'rhythm';
-  spreadMs?: number;         // strum/roll speed
-  pattern?: Step[];          // arpeggio / rhythm steps (degree index + timing + velocity)
-  release?: number;          // seconds
-}
-interface SoundPreset { instrument: string; articulation: Articulation; fx: FxPreset; gain: number }
-
-interface ChordSlot { id: string; voicing: Voicing; sound?: Partial<SoundPreset>; lyric?: string }
-
 interface ChordPack {
-  id: string; name: string; style?: string; author?: string;
-  key: string;               // "Db", used for transposition + harmonizer scale fallback
-  bpm?: number;              // optional, for grooves / beat-snap
-  defaultSound: SoundPreset;
-  sections: { id: string; name: string; chords: ChordSlot[] }[]; // Song-mode progression
-  palette?: string[];        // ChordSlot ids shown as pads in Palette mode
-  source: 'authored' | 'transcribed' | 'sampled';
-  shareable: boolean;        // false for 'sampled' (Method C), enforced on export
+  id: string; title: string; artist: string;
+  key: string;                       // original key, e.g. "E"
+  sections: { id: string; name: string; chords: string[]; vibeId?: string }[];
+  order?: string[];                  // section order for Song mode (verse, chorus, verse, ...)
+  defaultVibeId: string;
+  vibeIds?: string[];                // vibes offered for this song (👍/👎 cycles them)
+  richness?: 'simple' | 'full' | 'lush';
+  sources?: string[];                // chord-chart references used to verify the pack
 }
 
-// Method C only
-interface SliceRef { chordSlotId: string; audioId: string; start: number; end: number; loopStart: number; loopEnd: number }
-```
+interface VibePreset {
+  id: string; name: string;
+  instrument: 'electric' | 'acoustic' | 'nylon' | 'piano' | 'rhodes' | string;
+  style: { kind: 'hold' | 'strum' | 'roll' | 'arpeggio'; spreadMs?: number; pattern?: number[] };
+  voicing: { family: 'guitar' | 'piano'; register?: [number, number]; richness?: 'simple' | 'full' | 'lush' };
+  chain: FxBlock[];                  // ordered; each { type, enabled, params }
+  macros: { name: string; targets: { block: number; param: string; min: number; max: number }[] }[];
+}
 
-Actions coming out of the mapping layer:
+type FxBlock =
+  | { type: 'amp'; enabled: boolean; params: { model: 'clean' | 'tube' | 'crunch' | 'fuzz'; drive: number; tone: number; level: number } }
+  | { type: 'cab'; enabled: boolean; params: { ir: string; warmth: number } }
+  | { type: 'mod'; enabled: boolean; params: { kind: 'chorus' | 'tremolo' | 'vibrato' | 'phaser'; rate: number; depth: number; mix: number } }
+  | { type: 'delay'; enabled: boolean; params: { ms: number; feedback: number; mix: number; pingPong?: boolean } }
+  | { type: 'reverb'; enabled: boolean; params: { ir: 'room' | 'spring' | 'plate' | 'hall' | 'shimmer'; mix: number; decay?: number } }
+  | { type: 'lofi'; enabled: boolean; params: { wobble: number; saturation: number; cutoff: number; noise: number } };
 
-```ts
 type PerformanceAction =
-  | { type: 'chord.play'; slotId?: string; velocity: number; direction?: 'down' | 'up' }
-  | { type: 'chord.release' } | { type: 'chord.next' } | { type: 'chord.prev' }
-  | { type: 'section.next' } | { type: 'section.prev' } | { type: 'section.goto'; id: string }
-  | { type: 'sustain'; on: boolean } | { type: 'stopAll' }
-  | { type: 'articulation.set'; kind: Articulation['kind'] }
-  | { type: 'expr'; param: 'swell' | 'brightness' | 'space'; value: number } // continuous 0..1
-  | { type: 'harmony.toggle' } | { type: 'looper.cycle' };
+  | { type: 'chord.next'; velocity?: number } | { type: 'chord.prev' }
+  | { type: 'chord.play'; padIndex: number; velocity: number }
+  | { type: 'chord.strum'; direction: 'down' | 'up'; velocity: number }
+  | { type: 'chord.release' } | { type: 'sustain'; on: boolean } | { type: 'stopAll' }
+  | { type: 'section.next' } | { type: 'section.goto'; id: string }
+  | { type: 'vibe.next' } | { type: 'vibe.prev' }
+  | { type: 'macro'; index: number; value: number }    // continuous 0..1 (left-hand height)
+  | { type: 'mode.toggle' };
 ```
 
 ## 5. Critical subsystems
 
-### 5.1 Gesture → sound latency (the #1 risk for "playing" chords)
-Here the hands *play*, so gestures can't wait for a quantized beat the way v1 did.
-- Budget: camera about 33 ms + inference about 15–25 ms + audio output about 10–20 ms ≈ **60–80 ms**.
-  That's fine for slow, sustained chords and borderline for fast rhythmic strumming.
-- Ways to keep it down:
-  - Run the hand model on **every frame**, skip pose/face when not needed, and use a 60 fps camera when available.
-  - **Predictive pinch**: track how fast the thumb–index distance is closing. Fire when the
-    *projected* contact is under about 1 frame away, instead of waiting for actual contact.
-  - **Strum detection** on fingertip velocity crossing a line, with direction from the sign.
-  - Pre-load and pre-decode all samples for the active pack. No allocation on note-on.
-- **Optional beat-snap** when a groove is on: chords land exactly on the beat, so camera delay doesn't matter.
+### 5.1 Gesture → sound latency (top risk)
+- Budget: camera about 33 ms + inference about 15–25 ms + audio output about 10–20 ms ≈ **60–80 ms**. That's fine for
+  chords that ring out, and the camera's delay is the only real cost.
+- Mitigations: hand model every frame (no pose/face), a 60 fps camera if available, **predictive pinch**
+  (fire on the projected contact from the closing speed), strum detection on fingertip velocity crossing a
+  line, all samples for the active pack pre-decoded, no allocation on note-on.
 
-### 5.2 Sampler
-- Instruments are SFZ-like JSON maps: `{ key range, velocity range, sample URL, root note, loop points, release }`.
-- Voice allocation with release tails. Round-robin variations so repeated chords don't sound robotic.
-- A strum plays notes low → high (or high → low) with `spreadMs`, and a little random timing
-  and velocity variation sounds human.
-- Samples are lazy-loaded per pack and cached by the service worker.
+### 5.2 Voicing engine
+- **Piano**: root (+ octave) in the left hand within E1–C3. The right hand plays the remaining chord tones (3rd and 7th are
+  mandatory; drop the 5th first) in a close voicing within C3–C5. Richness adds 9/sus2 where the chord quality allows.
+- **Guitar**: a shape library (open, E-/A-shape barre, common jazz grips) + a search over the fretboard for
+  playable fingerings (≤ 4-fret span, ≤ 6 strings, root in the bass unless it's a slash chord). Score by playability +
+  open-string resonance + closeness to the previous voicing.
+- **Voice leading**: from all candidates, pick the one with the smallest total semitone movement from the previous
+  chord, with a small penalty for leaving the instrument's sweet-spot register.
+- Deterministic and unit-tested: given a symbol, instrument and previous voicing, the notes are always the same.
 
-### 5.3 Chord-aware harmonizer
-1. Detect the sung pitch (McLeod, 2048 window, ~5 ms hop at 48 kHz).
-2. Target pitches = for each voice, the **nearest chord tone** above or below the sung note, using
-   the *current Voicing's pitch classes*. Fall back to the scale when the singer is on a passing tone.
-3. Glide between targets (about 30–60 ms) so jumps at chord changes don't sound robotic.
-4. PSOLA pitch shift per voice → slight detune, delay and pan → shared reverb.
-5. Target under 25 ms from mic to harmony output.
+### 5.3 Sampler + articulator
+- Instruments are JSON maps `{ key range, velocity range, sample URL, root, release }`. Samples are lazy-loaded per pack.
+- Strum: notes are spread over `spreadMs` (down = low → high), velocity tapers, there's slight random timing (±5 ms).
+  Air-strum speed sets both the spread and the velocity.
+- Guitar has per-string voice stealing (a new strum chokes the same string). Piano has a sustain-pedal model.
 
-### 5.4 Method B — audio → voicings (offline analysis)
-1. Decode the file and resample to 22.05 kHz mono for Basic Pitch → note events (pitch, onset, offset, amplitude).
-   Optional: first remove the vocals with separation, so the melody doesn't pollute the chords (phase 5 improves B).
-2. Beat tracking (Essentia.js) → beat grid.
-3. **Segment**: for each beat, build a pitch-class vector from active notes (and chroma as a cross-check).
-   A chord boundary is where the change between neighboring beats goes above a threshold, with a
-   minimum segment length (e.g. 2 beats).
-4. **Voicing per segment**: gather note energy per MIDI pitch → keep the top N pitches above an energy
-   threshold → remove octave duplicates in the top register → pick the lowest strong note as bass.
-5. **Name it**: match against chord templates (including slash chords and extensions) → a symbol like `Ebm7/Db`.
-6. A review screen shows the detected progression over a waveform. The user fixes notes or names,
-   then saves it as a `ChordPack` with `source: 'transcribed'`.
-
-### 5.5 Method C — real-recording slices
-1. Separate into stems (vocals / drums / bass / other). Keep `other + bass` (adjustable per pack).
-2. Reuse the B segmentation for chord boundaries. Each segment becomes a slice, with a zero-crossing-aligned
-   start and end.
-3. **Freeze**: choose a steady region inside the slice (lowest spectral change). Hold it with a crossfaded
-   loop, or with granular resynthesis for longer holds. Release = fade the tail.
-4. Packs are marked `shareable: false`. Export is blocked, and the audio stays in IndexedDB.
-
-### 5.6 Optional transport
-- Off by default (free timing). When on: BPM, tap tempo (camera-detected claps or a key press), a lookahead
-  scheduler, beat-snap for chord actions, grooves, and looper sync.
+### 5.4 Vibe chain
+- The chain is built from `VibePreset.chain` as native nodes. Changing parameters uses `setTargetAtTime` (no zipper noise).
+- **Switching vibes**: build the new chain in parallel and crossfade over about 150 ms, then tear down the old one. That way
+  reverb tails don't cut off.
+- Amp: WaveShaper curves generated from presets (tanh / asymmetric / hard-clip) with 4x oversampling, plus pre/post EQ.
+  Cab and reverb use short bundled impulse responses (CC0 or self-made).
+- **Macros** map one value (0..1) to several block parameters, e.g. "Grit" = amp drive ↑ + tone ↓ + level compensation.
+- CPU target: one chain under 5 % of a core. Only the active chain (plus one during a crossfade) exists at a time.
 
 ## 6. Performance targets
 
 | Path | Target |
 |---|---|
-| Vision | ≥ 30 fps with 2 hands, using < 40 % of one core plus the GPU |
-| Pinch/strum → sound | ≤ 80 ms (goal 60 ms) |
-| Command gesture → feedback on screen | ≤ 250 ms |
-| Mic → harmony output | ≤ 25 ms |
-| Method B analysis | < 1× song length on a modern laptop |
-| Audio glitches | 0 per 30 min. No allocation in the audio thread |
+| Vision | ≥ 30 fps with 2 hands |
+| Pinch / strum → sound | ≤ 80 ms (goal 60 ms) |
+| Command gesture → on-screen feedback | ≤ 250 ms |
+| Vibe switch | Glitch-free, ≤ 200 ms crossfade |
+| Audio glitches | 0 per 30 min |
 
 ## 7. Testing
-- **Unit (Vitest):** chord naming/parsing, voicing extraction on synthetic note sets, harmonizer target
-  logic, gesture FSMs replayed from recorded landmark JSON.
-- **Gesture fixtures:** recorded sessions of "singing and resting hands" must fire **0** play events, and
-  "deliberate pinches" must reach ≥ 98 % recall.
-- **Analysis golden tests:** short licensed or self-made clips with known chords → check the B pipeline's output.
-- **Audio:** OfflineAudioContext renders of articulations (strum spacing, release) with sample-exact checks.
-- **E2E (Playwright):** fake camera and mic streams. Load a pack, step chords with the keyboard, export a pack.
+- **Unit (Vitest)**: chord parsing (including slash chords and extensions), transposition and spelling, piano/guitar voicers
+  (snapshot the notes for each symbol), voice-leading choice, gesture FSMs replayed from recorded landmark JSON.
+- **Gesture fixtures**: "singing with hands resting or gesturing naturally" must fire 0 play events. Deliberate pinches
+  must reach ≥ 98 % recall.
+- **Audio**: OfflineAudioContext renders for strum timing, release tails, and vibe-switch crossfades (no clicks:
+  check for sample discontinuities).
+- **E2E (Playwright)**: fake camera stream. Load a pack, step chords with the keyboard, switch a vibe.
 
 ## 8. Phase 0 spike checklist
-- [ ] Vite + TS skeleton, COOP/COEP headers, PWA shell.
+- [ ] Vite + TS skeleton, PWA shell.
 - [ ] MediaPipe 2-hand tracking in a worker. Pinch, swipe and strum detectors with an on-screen latency readout.
-- [ ] Sampled EP/piano playing a hard-coded neo-soul voicing (e.g. a Db maj9) on pinch. Judge the feel by ear.
-- [ ] Basic Pitch on a 30 s clip in the browser. Print the per-segment voicings and compare them with a chord chart.
-- [ ] Mic → pitch detect → PSOLA a 3rd above, locked to a hard-coded chord. Judge the quality and latency.
+- [ ] Chord parser + piano and guitar voicers. Print voicings for a test progression.
+- [ ] Sampled piano + clean electric guitar playing voiced chords on pinch / keyboard.
+- [ ] Amp (clean/crunch) → cab → chorus → reverb chain, with a vibe switch. Judge by ear.
