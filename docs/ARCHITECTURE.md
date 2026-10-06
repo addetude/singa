@@ -2,6 +2,15 @@
 
 Companion to [PLAN.md](./PLAN.md).
 
+> **Status: Phase 0 prototype built.** The code follows this document, with three deliberate
+> shortcuts for the prototype (each is isolated behind an interface, so it can be swapped later):
+> 1. **Instruments are synthesized in code** (`src/audio/instruments/render.ts`): Karplus–Strong
+>    plucked strings for the guitars, FM synthesis for the Rhodes, additive synthesis for the piano.
+>    They are rendered into buffers and played by the `Sampler` exactly like recorded samples would be,
+>    so real multisampled instruments are a drop-in upgrade.
+> 2. **The UI is plain TypeScript + DOM**, not React yet (one screen doesn't need a framework).
+> 3. **Hand tracking runs on the main thread**, not a Web Worker yet.
+
 ## 1. Guiding decisions
 
 | Decision | Choice | Why |
@@ -45,42 +54,45 @@ Companion to [PLAN.md](./PLAN.md).
  └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 3. Modules
+## 3. Modules (as built)
 
 ```
 src/
-  app/              Shell + routes: Setup, Perform, VibeEditor, PackEditor, Library
-  state/            Zustand stores: performance, library, settings, ui
+  main.ts                 Builds the UI and wires camera → gestures → controller → sound
+  ui/
+    hud.ts                Canvas overlay: mirrored camera, hand skeletons, play zone, palette pads
+    styles.css
   vision/
-    worker.ts       MediaPipe in a worker (ImageBitmap frames in, events out)
-    features.ts     Pinch distance (normalized to hand size), fingertip velocity, pointer, height, handedness, zone
-    gestures/       pinch.ts, swipe.ts, strum.ts, pointer.ts, poses.ts (fist, palm, thumbs, victory)
-    fsm.ts          Hysteresis, dwell and cooldown. "Play" gestures fire instantly, "command" gestures need a dwell
-  input/            keyboard.ts, midi.ts (same event shape as vision)
-  mapping/          Per-mode gesture → action tables + user overrides
-  performance/      controller.ts, modes/song.ts, modes/palette.ts
+    tracker.ts            Webcam + MediaPipe HandLandmarker (2 hands, GPU with CPU fallback)
+    features.ts           21 landmarks → pinch ratio, fingers up, pose, in-zone
+    gestures.ts           GestureEngine: pinch (hysteresis + prediction), swipe, strum, dwell poses
+  input/
+    mapping.ts            Gesture events → controller actions (play hand vs shape hand)
+    keyboard.ts           Keyboard / page-turner pedal fallback
+  performance/
+    controller.ts         Song & Palette modes, cursor, transpose, vibe cycling, sustain
   music/
-    chords.ts       Parse symbols ("C#m7", "G/B", "Bm9", "Esus4") → root, quality, extensions, bass
-    transpose.ts    Transpose with sensible enharmonic spelling for the key
+    notes.ts              Note names ↔ pitch classes ↔ MIDI ↔ frequency
+    chords.ts             Chord-symbol parser, richness (simple/full/lush), transposition
     voicing/
-      piano.ts      Rules-based voicer (LH root/octave + RH close/spread, register limits)
-      guitar.ts     Fretboard voicer: shape library + search over playable fingerings
-      leading.ts    Pick the voicing candidate closest to the previous chord
+      piano.ts            Left hand bass (+5th/octave), right hand close / drop-2 voicings
+      guitar.ts           Fretboard search for playable shapes in standard tuning
+      leading.ts          Picks the candidate that moves least from the previous chord
+      index.ts            voiceChord(symbol, {family, richness}, prev)
   audio/
-    engine.ts       AudioContext, master bus, limiter, output selection
-    sampler/        Instrument loader, voice allocation, velocity layers, round-robin, release tails
-    articulator.ts  (notes, velocity, direction, style) → scheduled note-ons (strum spread + humanize)
-    fx/
-      amp.ts        Pre-EQ → WaveShaper (curves: clean/tube/crunch/fuzz, oversample 4x) → post-EQ
-      cab.ts        Short ConvolverNode IRs (1x12, 2x12, 4x12) + tone EQ
-      mod.ts        Chorus, tremolo, vibrato, phaser
-      delay.ts      Slapback, dotted-8th (free ms in phase 1), ping-pong
-      reverb.ts     Convolver IRs: room, spring, plate, hall. Shimmer via worklet
-      lofi.ts       Tape wobble (modulated delay), saturation, low-pass, vinyl noise
-      chain.ts      Builds the chain from a VibePreset, macro mapping, glitch-free switching
-    vibes/          Built-in vibe presets (JSON)
-  packs/            Schema, validation, built-in packs (JSON), import/export
-  storage/          Dexie schema
+    engine.ts             AudioContext + master bus + limiter
+    instruments/          Instrument definitions + procedural note renderers
+    sampler.ts            Plays cached note buffers with velocity layers and release
+    articulator.ts        Strum / roll / hold timing, humanize, chord choking
+    fx/blocks.ts          amp, cab, eq, comp, mod (chorus/vibrato/tremolo), delay, reverb, lofi
+    fx/chain.ts           Builds a vibe's block chain and maps macro knobs onto block params
+    vibes.ts              The 7 vibe presets
+    sound.ts              Facade: setVibe (tail-preserving switch), play, release, setMacro
+  packs/
+    types.ts              ChordPack schema, flatten to Song-mode steps, unique chords for pads
+    builtin.ts            Best Part · drivers license · Glue Song
+tests/                    Vitest: music theory, voicers, gestures (synthetic hands), controller
+scripts/setup-assets.mjs  Copies MediaPipe WASM + downloads the hand model on npm install
 ```
 
 ## 4. Data model

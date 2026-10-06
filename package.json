@@ -1,0 +1,23 @@
+{
+  "name": "singa",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Air chord instrument for singers: play song chords with your hands via webcam.",
+  "scripts": {
+    "postinstall": "node scripts/setup-assets.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.35"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
