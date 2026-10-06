@@ -1,4 +1,4 @@
-# Singa — Architecture
+# Singa — Architecture (v2: vocal accompaniment)
 
 Companion to [PLAN.md](./PLAN.md).
 
@@ -6,222 +6,216 @@ Companion to [PLAN.md](./PLAN.md).
 
 | Decision | Choice | Why |
 |---|---|---|
-| Platform | **Browser-only SPA, desktop Chrome/Edge first** | Best support for WebGPU/WASM, AudioWorklet, Web MIDI and getUserMedia. Firefox/Safari get best effort. |
-| Backend | **None for v1** | Everything runs locally: privacy, offline use, no latency. Add a backend later only for sharing or accounts. |
-| Language / build | **TypeScript + Vite** | Fast dev loop, worker/worklet bundling. |
-| UI framework | **React** (or Svelte, both fine) + Zustand for state | The UI is a thin layer. The audio and vision engines are framework-agnostic TS modules. |
-| Computer vision | **MediaPipe Tasks Vision** (`@mediapipe/tasks-vision`): GestureRecognizer, HandLandmarker, PoseLandmarker, FaceLandmarker | Runs on the GPU in the browser, with built-in gestures (✋✊👍👎☝️✌️🤘) and 21 landmarks per hand. |
-| Audio | **Web Audio API + custom AudioWorklets**, with Tone.js only for synths/FX if needed | Sample-accurate scheduling. The looper and harmonizer need custom DSP anyway. |
-| DSP libs | `pitchy` (McLeod pitch), Rubber Band WASM or a custom PSOLA for pitch shifting, Essentia.js / Meyda for chroma & chord detection | Proven implementations. |
-| Storage | **IndexedDB** via Dexie (audio blobs plus song JSON) | Large binary storage, offline. |
-| Offline | **PWA** (service worker caches the app and MediaPipe models) | Venues have bad Wi-Fi. |
-| Hosting | Static host with **COOP/COEP headers** (needed for SharedArrayBuffer), e.g. Netlify, Vercel or Cloudflare Pages | Lock-free audio ring buffers between threads. |
+| Platform | **Browser SPA, desktop Chrome/Edge first** | WebGPU/WASM, AudioWorklet, getUserMedia, Web MIDI |
+| Backend | **None for phases 1–4.** Optional local helper for Method C (phase 5) | Privacy (users' songs never leave the machine), offline, free hosting |
+| Build / UI | **TypeScript + Vite + React + Zustand** | The UI is thin. The engines are framework-agnostic TS |
+| Vision | **MediaPipe Tasks Vision**: HandLandmarker (2 hands) + GestureRecognizer. PoseLandmarker optional (play zone) | GPU-accelerated, 21 landmarks per hand, built-in gesture labels |
+| Instruments | **Multisampled instruments** loaded from SFZ-style sample maps, played by a custom sampler on Web Audio (or `Tone.Sampler` to start) | Realistic sound is what makes a "Caesar chord" sound like one. Synths won't |
+| Harmonizer DSP | AudioWorklet: McLeod pitch detection + PSOLA pitch shifting | Low latency on a monophonic voice |
+| Audio analysis | **Spotify Basic Pitch** (`@spotify/basic-pitch`, TF.js) in a worker; Essentia.js/Meyda for beats and chroma | Runs in the browser and handles polyphonic notes |
+| Source separation | Phase 5: Demucs-family model, either ONNX Runtime Web (WebGPU) **or** an optional local Python helper | Heavy model. Browser-first if fast enough, with a helper as fallback |
+| Storage | IndexedDB (Dexie): packs, samples, user audio, analysis cache | Large blobs, offline |
+| Offline | PWA: caches the app, models and the instrument samples in use | |
+| Hosting | Static host with COOP/COEP headers | SharedArrayBuffer for audio and worker rings |
 
-**Key audio decision:** Singa **does not pass your dry guitar or vocal through**.
-Monitor those directly through your audio interface (zero latency). Singa only
-outputs backing clips, loops, the metronome and the *wet* harmony voices. Browser
-round-trip latency then matters only for the harmonizer, where 15–30 ms is
-acceptable for an added voice.
+**Audio path:** the mic carries the voice only. The app outputs chords, the backing and
+*wet* harmonies. The dry voice is either monitored on the user's interface or headphones,
+or passed through by the app (adds about 10–20 ms, which is fine for most singers). Users choose in setup.
 
 ## 2. High-level diagram
 
 ```
-                 ┌──────────────────────────── MAIN THREAD (UI) ───────────────────────────┐
- Webcam ──video──►  <video>  ──frames──►┐                                                  │
-                 │                      │   React UI  ◄──── Zustand store ◄── events ──┐   │
-                 │                      │   (HUD, grid, editor)                         │   │
-                 │                      ▼                                               │   │
-                 │        ┌──────── VISION WORKER ────────┐                             │   │
-                 │        │ MediaPipe Gesture/Hand/Pose/   │                             │   │
-                 │        │ Face landmarkers (GPU)         │                             │   │
-                 │        │   → Feature extractor          │                             │   │
-                 │        │   → Gesture classifiers        │                             │   │
-                 │        │   → Debounce / dwell FSM       │── SignalEvents ──┐          │   │
-                 │        └────────────────────────────────┘                  │          │   │
- Keyboard/Pedal ─┼─────────────────────────────────────────── InputEvents ───►│          │   │
- MIDI in ────────┼────────────────────────────────────────────────────────────►          │   │
-                 │                                                    ┌───────▼───────┐  │   │
-                 │                                                    │  Mapping layer│  │   │
-                 │                                                    │ signal→Action │  │   │
-                 │                                                    └───────┬───────┘  │   │
-                 │                                                    ┌───────▼───────┐  │   │
-                 │                                                    │ Command bus + │──┘   │
-                 │                                                    │ Quantizer     │      │
-                 │                                                    └───────┬───────┘      │
-                 └────────────────────────────────────────────────────────────┼──────────────┘
-                                                                              │ scheduled cmds (time = AudioContext seconds)
-                 ┌───────────────────────────── AUDIO ENGINE ─────────────────▼──────────────┐
- Interface in ──►│ Input router ──┬─► Looper worklet (record/overdub, ring buffers)          │
- (guitar, vox)   │                ├─► Analysis worklet (pitch, chroma→chord, onset, levels) │
-                 │                └─► Harmonizer worklet (pitch-shift voices in key)        │
-                 │ Transport/clock (lookahead scheduler)                                    │
-                 │ Clip players (AudioBufferSourceNodes per track) ─► track gain/FX ─┐      │
-                 │ Metronome ───────────────────────────────────────────────────────┤      │
-                 │ Looper outs, Harmony outs ───────────────────────────────────────┴► Master ─► Out
-                 │                                                     └─► MediaStreamDest ─► Recorder
-                 └──────────────────────────────────────────────────────────────────────────┘
+ Webcam ─► VISION WORKER ──────────────────────────────────────────────┐
+           MediaPipe hands (+pose) → features (pinch dist, velocity,  │ GestureEvents
+           finger count, height, zone) → gesture FSMs                 │ (+ continuous values)
+                                                                      ▼
+ Keyboard / MIDI ─────────────────────────────────────────►  INPUT ROUTER
+                                                                      │
+                                                              MAPPING LAYER (per mode)
+                                                                      │  PerformanceActions
+                                                                      ▼
+                                       ┌────────────── PERFORMANCE CONTROLLER ──────────────┐
+                                       │ Mode logic: Song (cursor in progression) /        │
+                                       │ Palette (pad grid) / Theory (degree + color)      │
+                                       │ → "current chord" state (ChordSound + dynamics)   │
+                                       └──────┬───────────────────────────┬─────────────────┘
+                                              │ chord events              │ current chord tones
+                                              ▼                           ▼
+ ┌──────────────────────────────── AUDIO ENGINE (AudioContext) ──────────────────────────────┐
+ │ Articulator (hold / strum / roll / arpeggio / rhythm; optional beat-snap via Transport)  │
+ │   → Sampler voices (instrument per ChordSound) → Color FX chain ─┐                       │
+ │ Slice player (Method C pads, freeze/granular sustain) ───────────┤                       │
+ │ Bass-follow + drum grooves (phase 4) ────────────────────────────┤                       │
+ │ Mic ─► Harmonizer worklet (pitch detect → chord-tone targets → PSOLA) ─► vocal FX ───────┤──► Master ─► Out
+ │     └► Vocal looper worklet ─────────────────────────────────────────────────────────────┘      └► Recorder
+ └──────────────────────────────────────────────────────────────────────────────────────────┘
+
+ ANALYSIS (offline, worker, not real-time):
+   user audio ─► [Method C: separation] ─► beat tracking ─► chord segmentation (chroma + Basic Pitch notes)
+              ─► voicing extraction ─► ChordPack (B) or SlicePack (C) ─► IndexedDB
 ```
 
 ## 3. Modules
 
 ```
 src/
-  app/            React shell, routes (Setup, Perform, Editor, Mapping, Library)
-  state/          Zustand stores: transport, session (song/scenes/clips), ui, settings
+  app/              Shell + routes: Setup, Perform, PackEditor, Library
+  state/            Zustand stores: performance, packs, settings, ui
   vision/
-    worker.ts     Runs the MediaPipe tasks off the main thread
-    features.ts   Landmarks → features (finger curls, palm normal, hand-above-guitar, head tilt, neck angle)
-    classifiers/  builtin.ts (MediaPipe labels), zones.ts (air buttons), head.ts, pose.ts, knn.ts (custom)
-    fsm.ts        Dwell / cooldown / arm-window state machine → SignalEvent
-  input/          keyboard.ts, midi.ts (Web MIDI), pedal.ts. All emit the same SignalEvent type
-  mapping/        Signal → Action resolution, per song, with default profiles
-  commands/       Action types, command bus, quantizer (next beat / bar / immediate)
+    worker.ts       MediaPipe in a worker (ImageBitmap frames in, events out)
+    features.ts     Pinch distance (normalized to hand size), fingertip velocity, finger count,
+                    palm height/depth, handedness, play-zone test
+    gestures/       pinch.ts, swipe.ts, strum.ts, pose-commands.ts (fist/thumbs/victory/rock), pointer.ts
+    fsm.ts          Hysteresis + dwell + cooldown; "play" gestures fire instantly, "command" gestures need a dwell
+  input/            keyboard.ts, midi.ts, all emit the same GestureEvent shape
+  mapping/          Per-mode gesture → action tables, user overrides
+  performance/
+    controller.ts   Owns the current chord/section/mode, handles actions
+    modes/          song.ts, palette.ts, theory.ts
   audio/
-    context.ts    AudioContext setup, device selection, latency info
-    transport.ts  Clock + lookahead scheduler (the "two clocks" pattern)
-    clips.ts      Clip loading/decoding, players, follow actions
-    looper/       looper-worklet.ts + controller.ts
-    harmonizer/   harmonizer-worklet.ts (pitch detect + shift) + scale/chord logic
-    analysis/     analysis-worklet.ts (pitch, chroma, chord, onset, RMS)
-    fx/           Reverb, delay, filter (native nodes)
-    calibration.ts Round-trip latency measurement
-    recorder.ts   MediaRecorder of canvas + master bus
-  storage/        Dexie schema, import/export (.singa zip)
-  music/          Theory helpers: keys, scales, intervals, chord templates
+    engine.ts       AudioContext, routing, master bus, latency info
+    transport.ts    Optional tempo clock + lookahead scheduler (beat-snap, grooves, looper)
+    articulator.ts  Turns (ChordSound, velocity, direction) into scheduled note-ons
+    sampler/        SFZ-lite loader, voice allocation, round-robin, velocity layers, release tails
+    slices.ts       Method C slice playback + freeze (loop crossfade / granular)
+    harmonizer/     worklet (pitch + PSOLA), target-note logic using the current chord tones
+    looper/         Vocal looper worklet
+    fx/             Reverb (convolution), chorus, tape wobble, lo-fi filter, delay
+    recorder.ts     canvas.captureStream + master bus → MediaRecorder
+  analysis/
+    worker.ts       Runs Basic Pitch, beat tracking, chroma
+    segment.ts      Beat-synchronous harmonic change detection → chord segments
+    voicing.ts      Notes in segment → weighted pitch set → cleaned voicing + chord name
+    separate.ts     (phase 5) Source separation adapter (ONNX web or local helper)
+  music/            Note/interval/chord-symbol parsing + naming, scales, transposition, voice leading
+  packs/            Schema, validation, built-in packs (JSON), import/export (.singapack)
+  storage/          Dexie schema
 ```
 
-## 4. Key data types (sketch)
+## 4. Core data model
 
 ```ts
-// ---- Signals: "something the performer did" ----
-type SignalSource = 'hand' | 'pose' | 'head' | 'zone' | 'keyboard' | 'midi';
-interface SignalEvent {
-  id: string;              // e.g. 'hand.thumbs_up', 'zone.2', 'head.tilt_left', 'key.ArrowRight'
-  source: SignalSource;
-  phase: 'start' | 'hold' | 'end' | 'trigger';
-  value?: number;          // continuous signals (0..1), e.g. hand height
-  confidence: number;
-  t: number;               // performance.now()
+// A chord's full "sound"
+interface Voicing {
+  symbol: string;            // display name, e.g. "Ebm7/Db"
+  notes: number[];           // MIDI notes, exact register, e.g. [49, 56, 72, 75, 77]
+  bass?: number;             // optional separate bass note (for bass-follow / slash chords)
+}
+interface Articulation {
+  kind: 'hold' | 'strum' | 'roll' | 'arpeggio' | 'rhythm';
+  spreadMs?: number;         // strum/roll speed
+  pattern?: Step[];          // arpeggio / rhythm steps (degree index + timing + velocity)
+  release?: number;          // seconds
+}
+interface SoundPreset { instrument: string; articulation: Articulation; fx: FxPreset; gain: number }
+
+interface ChordSlot { id: string; voicing: Voicing; sound?: Partial<SoundPreset>; lyric?: string }
+
+interface ChordPack {
+  id: string; name: string; style?: string; author?: string;
+  key: string;               // "Db", used for transposition + harmonizer scale fallback
+  bpm?: number;              // optional, for grooves / beat-snap
+  defaultSound: SoundPreset;
+  sections: { id: string; name: string; chords: ChordSlot[] }[]; // Song-mode progression
+  palette?: string[];        // ChordSlot ids shown as pads in Palette mode
+  source: 'authored' | 'transcribed' | 'sampled';
+  shareable: boolean;        // false for 'sampled' (Method C), enforced on export
 }
 
-// ---- Actions: "what the app should do" ----
-type Quantize = 'immediate' | 'beat' | 'bar' | '2bars' | '4bars';
-type Action =
-  | { type: 'clip.toggle'; trackId: string; slot?: number }
-  | { type: 'scene.launch'; sceneId: string } | { type: 'scene.next' } | { type: 'scene.prev' }
-  | { type: 'transport.stopAll' } | { type: 'transport.tap' } | { type: 'transport.drop'; bars: number }
-  | { type: 'looper.cycle'; trackId?: string }   // rec → overdub → play
-  | { type: 'looper.undo' } | { type: 'looper.clear'; trackId?: string }
-  | { type: 'harmony.toggle' } | { type: 'fx.param'; target: string; param: string } // continuous
-  | { type: 'song.next' };
+// Method C only
+interface SliceRef { chordSlotId: string; audioId: string; start: number; end: number; loopStart: number; loopEnd: number }
+```
 
-interface Mapping { signal: string; action: Action; quantize: Quantize; dwellMs?: number }
+Actions coming out of the mapping layer:
 
-// ---- Session model ----
-interface Song {
-  id: string; name: string; bpm: number; timeSig: [number, number]; key: string; // 'C#m'
-  tracks: Track[]; scenes: Scene[]; mappings: Mapping[];
-  harmony: { voices: Interval[]; mode: 'key' | 'chord' };
-  lyrics?: Record<string /*sceneId*/, string>;
-}
-interface Track { id: string; name: string; kind: 'clip' | 'looper'; gain: number; fx: FxSettings }
-interface Clip  { id: string; trackId: string; sampleId: string; bars: number; srcBpm: number; loop: boolean }
-interface Scene { id: string; name: string; clips: Record<string /*trackId*/, string | null> }
+```ts
+type PerformanceAction =
+  | { type: 'chord.play'; slotId?: string; velocity: number; direction?: 'down' | 'up' }
+  | { type: 'chord.release' } | { type: 'chord.next' } | { type: 'chord.prev' }
+  | { type: 'section.next' } | { type: 'section.prev' } | { type: 'section.goto'; id: string }
+  | { type: 'sustain'; on: boolean } | { type: 'stopAll' }
+  | { type: 'articulation.set'; kind: Articulation['kind'] }
+  | { type: 'expr'; param: 'swell' | 'brightness' | 'space'; value: number } // continuous 0..1
+  | { type: 'harmony.toggle' } | { type: 'looper.cycle' };
 ```
 
 ## 5. Critical subsystems
 
-### 5.1 Vision pipeline
-- **Input**: 640×480 or 1280×720 webcam at 30 fps. Frames go to the worker as an `ImageBitmap`
-  (transferable), or the worker reads an `OffscreenCanvas`.
-- **Models**: run **GestureRecognizer** (which includes hand landmarks) every frame, and **PoseLandmarker
-  (lite)** every 2nd frame. **FaceLandmarker** (for head tilt/nod) is optional and can be toggled to save
-  GPU.
-- **Features**: normalize landmarks to the hand's bounding box. Compute finger curl angles, palm
-  orientation, and *hand above the guitar line* (from pose: the strum-hand wrist above the hip/
-  shoulder midpoint). Also compute head roll from the eye line and the guitar-neck angle from the
-  fretting wrist relative to the shoulders.
-- **FSM for each signal**: `idle → candidate (conf > θ) → held (≥ dwell) → fired → cooldown`.
-  A short hysteresis prevents flicker. Only `fired` (and continuous values) leave the worker.
-- **Budget**: about 15–30 ms per frame on a modern laptop GPU. If the frame rate drops below 20 fps,
-  the worker turns off the face model and lowers pose frequency.
+### 5.1 Gesture → sound latency (the #1 risk for "playing" chords)
+Here the hands *play*, so gestures can't wait for a quantized beat the way v1 did.
+- Budget: camera about 33 ms + inference about 15–25 ms + audio output about 10–20 ms ≈ **60–80 ms**.
+  That's fine for slow, sustained chords and borderline for fast rhythmic strumming.
+- Ways to keep it down:
+  - Run the hand model on **every frame**, skip pose/face when not needed, and use a 60 fps camera when available.
+  - **Predictive pinch**: track how fast the thumb–index distance is closing. Fire when the
+    *projected* contact is under about 1 frame away, instead of waiting for actual contact.
+  - **Strum detection** on fingertip velocity crossing a line, with direction from the sign.
+  - Pre-load and pre-decode all samples for the active pack. No allocation on note-on.
+- **Optional beat-snap** when a groove is on: chords land exactly on the beat, so camera delay doesn't matter.
 
-### 5.2 Transport and quantized scheduling
-- The master clock is `AudioContext.currentTime`. A lookahead scheduler (a 25 ms timer
-  that schedules about 100 ms ahead) places clip starts, metronome clicks and looper boundaries at
-  sample-accurate times.
-- The **quantizer** turns an action into the time of the next boundary:
-  `tNext = barStart + ceil((now - barStart + safety) / gridLen) * gridLen`.
-  If the action lands within ~50 ms *after* a boundary, it fires on that boundary
-  ("late forgiveness"), because humans gesture slightly late.
-- Queued actions are kept in the store, so the HUD can show a countdown and the action can be cancelled
-  (repeating the same gesture cancels it).
+### 5.2 Sampler
+- Instruments are SFZ-like JSON maps: `{ key range, velocity range, sample URL, root note, loop points, release }`.
+- Voice allocation with release tails. Round-robin variations so repeated chords don't sound robotic.
+- A strum plays notes low → high (or high → low) with `spreadMs`, and a little random timing
+  and velocity variation sounds human.
+- Samples are lazy-loaded per pack and cached by the service worker.
 
-### 5.3 Clip engine
-- Samples are decoded once into `AudioBuffer`s and cached.
-- Each track has one active `AudioBufferSourceNode` (loop=true, loopEnd = bars × barLen), and a scene
-  swap crossfades at the boundary.
-- If a clip's `srcBpm` ≠ song BPM: v1 uses `playbackRate` (changes pitch) only for small differences
-  and warns otherwise. v2 adds offline time-stretch using Rubber Band WASM when the clip loads.
+### 5.3 Chord-aware harmonizer
+1. Detect the sung pitch (McLeod, 2048 window, ~5 ms hop at 48 kHz).
+2. Target pitches = for each voice, the **nearest chord tone** above or below the sung note, using
+   the *current Voicing's pitch classes*. Fall back to the scale when the singer is on a passing tone.
+3. Glide between targets (about 30–60 ms) so jumps at chord changes don't sound robotic.
+4. PSOLA pitch shift per voice → slight detune, delay and pan → shared reverb.
+5. Target under 25 ms from mic to harmony output.
 
-### 5.4 Looper
-- An AudioWorklet with preallocated buffers for each loop track (e.g. 60 s × 48 kHz × 2 ch).
-- The main thread and worklet communicate through a SharedArrayBuffer command ring, so there's no GC in the
-  audio thread.
-- **Latency compensation**: recorded audio is shifted earlier by `inputLatency + outputLatency`, a value
-  measured in calibration (a loopback click test using cross-correlation).
-- **First loop sets the tempo**: the first record press starts the timer and the second press ends it.
-  The length is rounded to the nearest whole bar count for a plausible BPM (70–160), which then sets the
-  transport BPM.
-- Undo = keep the previous layer buffer for each track (one level in v1).
+### 5.4 Method B — audio → voicings (offline analysis)
+1. Decode the file and resample to 22.05 kHz mono for Basic Pitch → note events (pitch, onset, offset, amplitude).
+   Optional: first remove the vocals with separation, so the melody doesn't pollute the chords (phase 5 improves B).
+2. Beat tracking (Essentia.js) → beat grid.
+3. **Segment**: for each beat, build a pitch-class vector from active notes (and chroma as a cross-check).
+   A chord boundary is where the change between neighboring beats goes above a threshold, with a
+   minimum segment length (e.g. 2 beats).
+4. **Voicing per segment**: gather note energy per MIDI pitch → keep the top N pitches above an energy
+   threshold → remove octave duplicates in the top register → pick the lowest strong note as bass.
+5. **Name it**: match against chord templates (including slash chords and extensions) → a symbol like `Ebm7/Db`.
+6. A review screen shows the detected progression over a waveform. The user fixes notes or names,
+   then saves it as a `ChordPack` with `source: 'transcribed'`.
 
-### 5.5 Harmonizer
-1. **Pitch detection** on the vocal input (McLeod/YIN, 1024–2048 window, about 10 ms hop).
-2. **Target notes**: snap the detected note to the song's scale, then step N scale degrees up or down
-   for each voice (e.g. diatonic 3rd above). In chord mode, the targets are chord tones from the guitar's
-   detected chord (chroma → template matching, smoothed over about 200 ms).
-3. **Pitch shift**: time-domain **PSOLA** (low latency, good on monophonic voice) inside
-   a worklet. Formant preservation is a stretch goal.
-4. Each voice gets a slight detune, delay and pan for realism, then goes through a shared reverb.
-- Latency target: under 30 ms input → output. Phase 0 includes a spike to validate the quality.
+### 5.5 Method C — real-recording slices
+1. Separate into stems (vocals / drums / bass / other). Keep `other + bass` (adjustable per pack).
+2. Reuse the B segmentation for chord boundaries. Each segment becomes a slice, with a zero-crossing-aligned
+   start and end.
+3. **Freeze**: choose a steady region inside the slice (lowest spectral change). Hold it with a crossfaded
+   loop, or with granular resynthesis for longer holds. Release = fade the tail.
+4. Packs are marked `shareable: false`. Export is blocked, and the audio stays in IndexedDB.
 
-### 5.6 Calibration
-- **Audio latency**: play 8 clicks, record from the input, and cross-correlate to find the offset. Use the
-  median and store it per device.
-- **Camera framing**: check that pose landmarks for the head, both wrists and the hips are visible with
-  confidence > 0.6.
+### 5.6 Optional transport
+- Off by default (free timing). When on: BPM, tap tempo (camera-detected claps or a key press), a lookahead
+  scheduler, beat-snap for chord actions, grooves, and looper sync.
 
-### 5.7 Recorder
-- `canvas.captureStream()` (camera plus overlay) combined with `MediaStreamAudioDestinationNode`
-  (master mix *plus* the dry inputs for the recording only) → `MediaRecorder` (WebM/MP4).
-
-## 6. Performance and reliability budget
+## 6. Performance targets
 
 | Path | Target |
 |---|---|
-| Vision frame | < 33 ms (30 fps), degrade gracefully |
-| Gesture → action visible on HUD | < 250 ms |
-| Action → audio | Lands exactly on the quantized boundary |
-| Harmonizer in → out | < 30 ms |
-| Audio glitches | 0 per 30-min set. Keep the audio thread allocation-free; the UI never blocks it |
+| Vision | ≥ 30 fps with 2 hands, using < 40 % of one core plus the GPU |
+| Pinch/strum → sound | ≤ 80 ms (goal 60 ms) |
+| Command gesture → feedback on screen | ≤ 250 ms |
+| Mic → harmony output | ≤ 25 ms |
+| Method B analysis | < 1× song length on a modern laptop |
+| Audio glitches | 0 per 30 min. No allocation in the audio thread |
 
-**Failure modes:**
-- Camera lost → toast, keep the audio running, and keyboard/pedal still work.
-- Low light → warn during setup.
-- Tab in the background → keep Perform view in the foreground and use the Wake Lock API to prevent sleep.
-
-## 7. Testing strategy
-- **Unit** (Vitest): quantizer math, music theory, mapping resolution, gesture FSM using recorded
-  landmark fixtures.
-- **Landmark replay**: record sessions of raw landmarks to JSON and replay them through the classifiers
-  in CI to catch false-trigger regressions (strumming footage should fire 0 actions).
-- **Audio**: OfflineAudioContext tests for scheduling and looper boundaries (sample-exact assertions).
-- **E2E** (Playwright, fake media streams): app boots, mapping works, keyboard fallback works.
+## 7. Testing
+- **Unit (Vitest):** chord naming/parsing, voicing extraction on synthetic note sets, harmonizer target
+  logic, gesture FSMs replayed from recorded landmark JSON.
+- **Gesture fixtures:** recorded sessions of "singing and resting hands" must fire **0** play events, and
+  "deliberate pinches" must reach ≥ 98 % recall.
+- **Analysis golden tests:** short licensed or self-made clips with known chords → check the B pipeline's output.
+- **Audio:** OfflineAudioContext renders of articulations (strum spacing, release) with sample-exact checks.
+- **E2E (Playwright):** fake camera and mic streams. Load a pack, step chords with the keyboard, export a pack.
 
 ## 8. Phase 0 spike checklist
-- [ ] Vite + TS skeleton with COOP/COEP dev headers.
-- [ ] Webcam → MediaPipe GestureRecognizer in a worker, with the label and fps on an overlay.
-- [ ] PoseLandmarker running at the same time. Measure combined fps.
-- [ ] AudioContext with a lookahead metronome, and a test that toggles a loop on the bar from a key press.
-- [ ] Mic → AudioWorklet pitch detect + PSOLA +4 semitones. Listen and measure latency.
-- [ ] Record 2 minutes of normal strumming and count false gesture triggers.
+- [ ] Vite + TS skeleton, COOP/COEP headers, PWA shell.
+- [ ] MediaPipe 2-hand tracking in a worker. Pinch, swipe and strum detectors with an on-screen latency readout.
+- [ ] Sampled EP/piano playing a hard-coded neo-soul voicing (e.g. a Db maj9) on pinch. Judge the feel by ear.
+- [ ] Basic Pitch on a 30 s clip in the browser. Print the per-segment voicings and compare them with a chord chart.
+- [ ] Mic → pitch detect → PSOLA a 3rd above, locked to a hard-coded chord. Judge the quality and latency.
