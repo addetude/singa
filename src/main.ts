@@ -14,9 +14,11 @@ import { PerformanceController, type PerformanceState } from './performance/cont
 import { drawHud, padLayout } from './ui/hud';
 import { computeFeatures, type HandFrame, type Side } from './vision/features';
 import { GestureEngine, type GestureEvent } from './vision/gestures';
-import { HandTracker, type FrameTiming } from './vision/tracker';
+import type { FrameTiming, HandTracker } from './vision/tracker';
 
 const ZONE_BOTTOM = 0.82;
+/** Set for builds that run where the camera isn't available (e.g. embedded previews). */
+const NO_CAMERA = import.meta.env.VITE_NO_CAMERA === 'true';
 
 // ---------------------------------------------------------------------------------------------
 // Markup
@@ -256,6 +258,8 @@ async function startCamera() {
   err.textContent = 'Starting camera and loading the hand model…';
   try {
     await engine.resume();
+    // Loaded on demand so the keyboard-only build doesn't ship the hand-tracking runtime.
+    const { HandTracker } = await import('./vision/tracker');
     await HandTracker.openCamera(video);
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
@@ -281,10 +285,19 @@ async function startKeys() {
   draw();
 }
 
+if (NO_CAMERA) {
+  $('go-cam').remove();
+  $('go-keys').textContent = 'Start';
+  $('go-keys').classList.add('primary');
+  $('start-err').textContent =
+    'Camera is unavailable here, so this is the sound check: play with the keyboard or click the stage. ' +
+    'Run it locally (npm run dev) for hand tracking.';
+}
+
 // ---------------------------------------------------------------------------------------------
 // Controls
 
-$('go-cam').addEventListener('click', () => void startCamera());
+$('go-cam')?.addEventListener('click', () => void startCamera());
 $('go-keys').addEventListener('click', () => void startKeys());
 $<HTMLSelectElement>('song').addEventListener('change', (e) => {
   ctl.loadPack(BUILTIN_PACKS.find((p) => p.id === (e.target as HTMLSelectElement).value)!);

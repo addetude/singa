@@ -4,3 +4,4 @@ public/mediapipe/
 public/models/
 *.log
 .DS_Store
+dist-artifact/

@@ -1,7 +1,6 @@
 // Draws the mirrored camera image, hand skeletons, play zone and palette pads onto a canvas.
 
-import type { HandFrame, Side } from '../vision/features';
-import { HAND_CONNECTIONS } from '../vision/tracker';
+import { HAND_CONNECTIONS, type HandFrame, type Side } from '../vision/features';
 
 export interface Rect {
   x: number;
